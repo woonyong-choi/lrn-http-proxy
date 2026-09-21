@@ -64,7 +64,7 @@ extern char **environ; /* libc에서 정의 */
 void unix_error(char *msg);
 void posix_error(int code, char *msg);
 void dns_error(char *msg);
-void gai_error(int code, char *msg);
+void csapp_gai_error(int code, char *msg);
 void app_error(char *msg);
 
 /* 프로세스 제어 래퍼 */
