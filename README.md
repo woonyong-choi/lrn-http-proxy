@@ -4,7 +4,7 @@ C로 직접 만든 HTTP/1.x GET 프록시입니다. **스레드 풀(worker 8·�
 
 [Proxy Wiki](https://docs.woonyong.com/wiki/computer-systems-network-topic-e8bae755299d/) · [핵심 구현](webproxy-lab/proxy.c) · [통합 테스트](tests/test_proxy.py)
 
-## 데모
+## 데모 (구동모습)
 
 ![lrn-http-proxy 데모: 같은 URL 2회 요청, 1회차 cache MISS 0.308s, 2회차 cache HIT 0.000471s](docs/demo.gif)
 
