@@ -4,6 +4,12 @@ HTTP GET 요청을 중계하고 재사용 가능한 작은 응답을 캐시하�
 
 [Proxy Wiki](https://docs.woonyong.com/wiki/computer-systems-network-topic-e8bae755299d/) · [핵심 구현](webproxy-lab/proxy.c)
 
+## 구동모습
+
+![lrn-http-proxy 데모: 같은 URL 2회 요청, 1회차 cache MISS 0.308s, 2회차 cache HIT 0.000471s](docs/demo.gif)
+
+같은 URL을 두 번 요청한 실제 실행 화면입니다. 1회차는 프록시 로그가 `cache MISS`, 원본 서버 도달, 응답 0.308s이고 2회차는 `cache HIT`, 응답 0.000471s입니다. 원본 서버는 원격 서버를 흉내 내려고 응답마다 300ms를 지연시키는 로컬 파이썬 서버라서, 이 시간 차이는 원본 지연이 있을 때의 값이며 일반적인 속도 향상 배수가 아닙니다. 재현: `make setup && bash scripts/demo_latency.sh` ([slow_origin.py](scripts/slow_origin.py)).
+
 ## 실행
 
 macOS/Linux의 C compiler, Make, Python 3가 필요합니다.
@@ -25,6 +31,8 @@ curl --noproxy '' -x http://127.0.0.1:8080 http://127.0.0.1:8000/home.html
 서버는 Ctrl-C로 종료합니다. demo/test는 자신이 만든 프로세스만 종료합니다.
 
 ## 구현과 설계
+
+![요청 흐름도: 대기 queue → 검증 → LRU 캐시 HIT/MISS → 원본 → 캐시 저장 조건](docs/figure.png)
 
 명시적 proxy 요청 → worker → URL·헤더 검증 → 원본 연결 또는 LRU cache → 응답으로 이어집니다.
 
