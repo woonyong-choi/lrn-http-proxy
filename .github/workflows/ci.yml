@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache build directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            webproxy-lab/.build
+            webproxy-lab/tiny/.build
+            webproxy-lab/tiny/cgi-bin/.build
+          key: build-${{ runner.os }}-${{ hashFiles('webproxy-lab/**/*.c', 'webproxy-lab/**/*.h', 'webproxy-lab/**/Makefile') }}
+
+      - name: Build
+        run: make setup
+
+      - name: Test (integration tests over TCP)
+        run: make test
