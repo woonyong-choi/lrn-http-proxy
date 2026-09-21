@@ -1,4 +1,4 @@
-# 🌐 lrn-http-proxy
+# lrn-http-proxy
 
 C로 직접 만든 HTTP/1.x GET 프록시입니다. **스레드 풀(worker 8·대기 queue 32)**로 동시 요청을 제한하고, 재사용이 허용된 작은 응답을 **LRU 메모리 캐시**에 저장해 원본 서버 요청 횟수를 줄입니다.
 
