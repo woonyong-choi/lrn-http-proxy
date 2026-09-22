@@ -1,11 +1,8 @@
 # Targets
 tiny/tiny
-tiny/cgi-bin/adder
 proxy
 .build/
 tiny/.build/
-tiny/cgi-bin/.build/
-echo/.build/
 
 # Driver test artifacts
 .proxy/

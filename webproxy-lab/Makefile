@@ -6,7 +6,7 @@ ARCH = $(shell uname -m)
 PLATFORM = $(OS)-$(ARCH)
 BUILD_DIR = .build/$(PLATFORM)
 PROXY_BIN = $(BUILD_DIR)/proxy.bin
-CSAPP_OBJ = $(BUILD_DIR)/csapp.o
+RIO_OBJ = $(BUILD_DIR)/rio.o
 PROXY_OBJ = $(BUILD_DIR)/proxy.o
 TINY_DIR = tiny
 
@@ -17,14 +17,14 @@ all: proxy
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(CSAPP_OBJ): csapp.c csapp.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c csapp.c -o $@
+$(RIO_OBJ): rio.c rio.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c rio.c -o $@
 
-$(PROXY_OBJ): proxy.c csapp.h | $(BUILD_DIR)
+$(PROXY_OBJ): proxy.c rio.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c proxy.c -o $@
 
-$(PROXY_BIN): $(PROXY_OBJ) $(CSAPP_OBJ)
-	$(CC) $(CFLAGS) $(PROXY_OBJ) $(CSAPP_OBJ) -o $@ $(LDFLAGS)
+$(PROXY_BIN): $(PROXY_OBJ) $(RIO_OBJ)
+	$(CC) $(CFLAGS) $(PROXY_OBJ) $(RIO_OBJ) -o $@ $(LDFLAGS)
 
 proxy: $(PROXY_BIN)
 	printf '%s\n' \
@@ -43,4 +43,4 @@ build-all: proxy tiny-build
 
 .PHONY: clean
 clean:
-	rm -f proxy $(PROXY_BIN) $(CSAPP_OBJ) $(PROXY_OBJ)
+	rm -f proxy $(PROXY_BIN) $(RIO_OBJ) $(PROXY_OBJ)

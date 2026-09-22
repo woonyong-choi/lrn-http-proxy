@@ -21,7 +21,6 @@ jobs:
           path: |
             webproxy-lab/.build
             webproxy-lab/tiny/.build
-            webproxy-lab/tiny/cgi-bin/.build
           key: build-${{ runner.os }}-${{ hashFiles('webproxy-lab/**/*.c', 'webproxy-lab/**/*.h', 'webproxy-lab/**/Makefile') }}
 
       - name: Build

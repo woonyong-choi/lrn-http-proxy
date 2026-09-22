@@ -13,9 +13,9 @@ PORT ?= 8000
 # 다른 시스템에서는 다른 설정이 필요할 수 있습니다.
 LIB = -lpthread
 
-.PHONY: all cgi clean run tiny
+.PHONY: all clean run tiny
 
-all: tiny cgi
+all: tiny
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -39,9 +39,5 @@ tiny: $(TINY_BIN)
 run: tiny
 	./tiny $(PORT)
 
-cgi:
-	(cd cgi-bin; make)
-
 clean:
 	rm -rf .build *.o tiny *~
-	(cd cgi-bin; make clean)

@@ -65,6 +65,15 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
+# Python
+__pycache__/
+*.pyc
+
+# 커버리지 산출물
+*.gcov
+*.gcda
+*.gcno
+
 # 작업 산출물·임시 파일 (저장소에 남기지 않는다)
 .local/
 *-handoff*.md
