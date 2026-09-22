@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import http.server
 import os
 from pathlib import Path
+import resource
 import socket
 import subprocess
 import tempfile
@@ -100,7 +101,7 @@ def wait_ready(proc, port, diagnostics):
 
 
 @contextmanager
-def servers():
+def servers(nofile=None):
     COUNTS.clear()
     origin = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Origin)
     thread = threading.Thread(target=origin.serve_forever, daemon=True)
@@ -112,6 +113,11 @@ def servers():
         env={**os.environ, "PROXY_TIMEOUT_MS": "300", "PROXY_WORKERS": str(WORKERS)},
         stdout=subprocess.DEVNULL,
         stderr=diagnostics,
+        preexec_fn=(
+            None
+            if nofile is None
+            else lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, nofile))
+        ),
     )
     try:
         wait_ready(proc, port, diagnostics)
@@ -290,6 +296,39 @@ class ProxyTests(unittest.TestCase):
             with socket.create_connection(("127.0.0.1", self.proxy), timeout=1):
                 pass
         self.assertIn(b"200", self.req("/alive").split(b"\r\n", 1)[0])
+
+
+class DescriptorExhaustionTests(unittest.TestCase):
+    def test_proxy_survives_running_out_of_descriptors(self):
+        # With the descriptor table smaller than the accept queue, a burst of
+        # idle connections drives accept() into EMFILE. Treating that as fatal
+        # ends the proxy for every later client, so the loop has to back off
+        # and keep serving instead.
+        with servers(nofile=24) as (proxy, origin):
+            held = []
+            try:
+                for _ in range(120):
+                    try:
+                        held.append(
+                            socket.create_connection(("127.0.0.1", proxy), timeout=1)
+                        )
+                    except OSError:
+                        break
+            finally:
+                for held_socket in held:
+                    held_socket.close()
+            deadline = time.monotonic() + 15
+            while True:
+                try:
+                    reply = request(proxy, origin, "/alive")
+                except OSError:
+                    reply = b""
+                if reply.startswith(b"HTTP/1.0 200"):
+                    return
+                self.assertLess(
+                    time.monotonic(), deadline, "proxy stopped serving after EMFILE"
+                )
+                time.sleep(0.2)
 
 
 if __name__ == "__main__":

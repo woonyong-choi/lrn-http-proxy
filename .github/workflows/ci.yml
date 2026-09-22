@@ -28,3 +28,9 @@ jobs:
 
       - name: Test (integration tests over TCP)
         run: make test
+
+      - name: Test under AddressSanitizer/UBSan and ThreadSanitizer
+        run: make test-sanitize
+
+      - name: Benchmark (smoke run; numbers are not asserted)
+        run: python3 scripts/bench.py --quick

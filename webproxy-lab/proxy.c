@@ -393,6 +393,14 @@ static void handle_client(int fd) {
   k = snprintf(first, sizeof first,
                "GET %s HTTP/1.0\r\nHost: %s:%s\r\nConnection: close\r\n", path,
                host, port);
+  /* snprintf returns the length it wanted, not the length it wrote; passing
+   * that to send_all unchecked would read past the buffer if the bounds on
+   * path and host ever move. */
+  if (k < 0 || (size_t)k >= sizeof first) {
+    close(origin);
+    error_reply(fd, 414, "URI Too Long");
+    return;
+  }
   if (send_all(origin, first, (size_t)k) || send_all(origin, headers, used) ||
       send_all(origin, "\r\n", 2)) {
     close(origin);
@@ -624,8 +632,17 @@ int main(int argc, char **argv) {
   for (;;) {
     int fd = accept(listenfd, NULL, NULL);
     if (fd < 0) {
-      if (errno == EINTR)
+      if (errno == EINTR || errno == ECONNABORTED)
         continue;
+      /* Out of descriptors is a load condition, not a reason to take the
+       * proxy down. Back off so the retry loop cannot spin on a full table
+       * while the workers close what they hold. */
+      if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
+          errno == ENOMEM) {
+        struct timespec pause = {0, 20 * 1000 * 1000};
+        nanosleep(&pause, NULL);
+        continue;
+      }
       break;
     }
     pthread_mutex_lock(&queue_lock);

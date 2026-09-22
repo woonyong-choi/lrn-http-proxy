@@ -26,7 +26,10 @@ C로 직접 만든 HTTP/1.x GET 프록시입니다. **스레드 풀(worker 8·�
 | 같은 URL 3회 요청 | 프록시 로그 `MISS` → `HIT` → `HIT`, 원본에는 **1회만** 도달 | 아래 로그 |
 | 응답 시간(원본 300ms 지연 조건) | MISS 0.308s → HIT 0.0004s | `bash scripts/demo_latency.sh` |
 | 만료 | 원본 요청 수 `MISS 1` → `HIT 1` → 만료 후 `EXPIRED 2` | `make demo` |
-| 통합 테스트 | 8개 통과 (7.5초) | `make test` |
+| 통합 테스트 | 12개 통과 (약 10초), ASan·UBSan·TSan 아래에서도 통과 | `make test` · `make test-sanitize` |
+| 프록시가 더하는 비용 | 원본 직접 0.110 ms → 프록시 MISS 0.148 ms (p50, **+0.038 ms**) | `make bench` |
+| 캐시 HIT | MISS 0.148 ms → HIT 0.055 ms (p50, 원본 지연이 0일 때 2.7배) | `make bench` |
+| 병목 확인 | 200 ms 원본에 동시 32요청 → 0.820초. worker 8개가 4배치로 처리할 때의 이론값 0.800초에 붙는다 | `make bench` |
 | 동시성 한도 | worker 8, 대기 queue 32 | 프록시 시작 로그 |
 | 캐시 한도 | 전체 1,049,000바이트 · 객체 102,400바이트 · 16개 entry | 프록시 시작 로그 |
 
@@ -46,9 +49,11 @@ cache HIT http://127.0.0.1:8000/index.txt
 macOS/Linux의 C compiler, Make, Python 3가 필요합니다.
 
 ```sh
-make setup   # proxy·tiny 빌드
-make demo    # MISS → HIT → EXPIRED 출력
-make test    # 통합 테스트 8개
+make setup          # proxy·tiny 빌드
+make demo           # MISS → HIT → EXPIRED 출력
+make test           # 통합 테스트 12개
+make bench          # docs/bench.md·bench.svg·bench.json 재생성
+make test-sanitize  # 같은 테스트를 ASan+UBSan·TSan 빌드로 다시 실행
 ```
 
 직접 요청하려면 다음 명령을 각각 다른 터미널에서 실행합니다.
@@ -65,13 +70,13 @@ curl --noproxy '' -x http://127.0.0.1:8080 http://127.0.0.1:8000/home.html
 
 ![요청 흐름도: 대기 queue → 검증 → LRU 캐시 HIT/MISS → 원본 → 캐시 저장 조건](docs/figure.png)
 
-명시적 proxy 요청 → worker → URL·헤더 검증 → 원본 연결 또는 LRU cache → 응답으로 이어집니다. 핵심 결정은 다음과 같습니다([proxy.c](webproxy-lab/proxy.c)).
+명시적 proxy 요청 → worker → URL·헤더 검증 → 원본 연결 또는 LRU cache → 응답으로 이어집니다. 핵심 결정은 다음과 같고, **고른 것뿐 아니라 버린 대안과 그 이유, 지켜야 할 불변식 목록은 [docs/design.md](docs/design.md)에 따로 적었습니다**([proxy.c](webproxy-lab/proxy.c)).
 
 **동시성 모델: 고정 스레드 풀 + 유한 queue**
 
 - main 스레드는 `accept`한 소켓을 크기 32의 원형 queue에 넣고, 미리 만들어 둔 worker 8개가 조건 변수로 꺼내 처리합니다. 연결마다 스레드를 만들지 않으므로 동시에 처리하는 요청과 스레드 수가 상한을 넘지 않습니다.
 - queue가 가득 차면 새 연결을 **닫아 버립니다**(대기열을 무한히 키우지 않고 과부하를 클라이언트에 알림). loopback에만 바인딩합니다.
-- 트레이드오프: worker가 8개뿐이라 느린 원본이 worker를 오래 붙잡으면 처리량이 떨어집니다. 그래서 timeout에 상한을 두었습니다.
+- 트레이드오프: worker가 8개뿐이라 느린 원본이 worker를 오래 붙잡으면 처리량이 떨어집니다. 그래서 timeout에 상한을 두었습니다. 이 대가는 측정했습니다 — 200 ms 원본에 동시 32요청을 보내면 0.820초가 걸리고, 이는 "worker 8개가 4배치로 처리한다"는 이론값 0.800초와 사실상 같습니다([bench.md](docs/bench.md) 3절). 즉 병목은 대역폭이나 CPU가 아니라 worker 수 자체입니다.
 
 **timeout**
 
@@ -90,14 +95,16 @@ curl --noproxy '' -x http://127.0.0.1:8080 http://127.0.0.1:8000/home.html
 
 [![CI](https://github.com/woonyong-choi/lrn-http-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/woonyong-choi/lrn-http-proxy/actions/workflows/ci.yml) <!-- push 후 URL이 활성화된다. -->
 
-- `make test`: [TCP 통합 테스트](tests/test_proxy.py) 8개가 별도 원본 서버의 **요청 횟수**로 HIT/MISS·만료·LRU 축출·용량 한도, 인증·쿠키 요청의 캐시 우회, 끊긴 원본의 비캐시, 병렬 응답과 반복 disconnect, timeout과 지원하지 않는 framing, Tiny 정적 파일을 확인합니다.
-- CI([ci.yml](.github/workflows/ci.yml)): ubuntu-latest에서 `make setup`·`make test`를 실행합니다.
+- `make test`: [TCP 통합 테스트](tests/test_proxy.py) 12개가 별도 원본 서버의 **요청 횟수**로 HIT/MISS·만료·LRU 축출·용량 한도, 인증·쿠키 요청의 캐시 우회, 끊긴 원본의 비캐시, 병렬 응답과 반복 disconnect, timeout과 지원하지 않는 framing, Tiny 정적 파일을 확인합니다. 여기에 더해 잘못된 요청 18종이 **원본에 닿기 전에** 거절되는지, 캐시가 돌려준 본문이 원본과 **바이트 동일**한지(NUL과 빈 줄이 섞인 바이너리), 같은 cold URL에 동시 요청이 몰렸을 때 원본 요청이 **worker 수를 넘지 않고** 모든 클라이언트가 같은 바이트를 받는지, 디스크립터가 고갈돼도 프록시가 **살아남는지**를 확인합니다. 어떤 테스트가 어떤 불변식을 지키는지는 [design.md](docs/design.md) 0절의 표에 있습니다.
+- `make test-sanitize`: 같은 12개를 ASan+UBSan(누수 탐지 포함)과 TSan 빌드로 다시 돌립니다. 바이트 동일성과 동시 요청 일관성은 메모리 안전성·데이터 경합이 없어야 성립하는 불변식이라 단언만으로는 절반만 증명되기 때문입니다. (2026-09 기준 Apple Silicon/macOS 26에서는 sanitizer 런타임이 기동하지 않아 스크립트가 건너뛰고, Linux와 CI에서 실행됩니다.)
+- CI([ci.yml](.github/workflows/ci.yml)): ubuntu-latest에서 `make setup`·`make test`·`make test-sanitize`와 벤치마크 smoke run을 실행합니다.
 
 ## 배운 점·한계
 
 - "캐시했다"가 아니라 **원본이 몇 번 요청받았는지**로 검증해야 캐시가 틀린 응답을 재사용하는 경우(쿠키·인증·만료)를 잡을 수 있었습니다.
-- 동시성은 스레드를 늘리는 문제가 아니라 상한과 과부하 시 동작(queue가 차면 연결 닫기)을 정하는 문제였습니다.
-- 학습용 프로그램입니다. 캐시 재검증(`ETag`)·chunked 응답·HTTPS 터널링이 없고, 이미 응답 일부를 전달한 뒤 원본이 끊기면 연결 종료로 처리합니다.
+- 동시성은 스레드를 늘리는 문제가 아니라 상한과 과부하 시 동작(queue가 차면 연결 닫기)을 정하는 문제였습니다. 상한을 정해 두니 부수 효과가 따라왔습니다 — 프록시가 동시에 쥐는 디스크립터가 `1 + queue(32) + worker`로 묶여서, 디스크립터 한도를 48로 낮춰도 `accept`가 EMFILE을 보지 못합니다.
+- 병목은 주장하지 말고 재야 했습니다. "느린 원본이 worker를 붙잡는다"는 README에 먼저 적혀 있었지만, 실제로 재고 나서야 그 숫자가 이론값과 붙는다는 것(따라서 병목이 정확히 worker 수라는 것)을 말할 수 있었습니다.
+- 학습용 프로그램입니다. 캐시 재검증(`ETag`)·chunked 응답·HTTPS 터널링이 없고, 이미 응답 일부를 전달한 뒤 원본이 끊기면 연결 종료로 처리합니다. 요청 병합도 없어서 같은 cold URL에 동시 요청이 몰리면 원본은 worker 수만큼 중복 요청을 받습니다 — 다음에 손댄다면 여기입니다([design.md](docs/design.md) 5절).
 
 ## 출처
 
@@ -105,4 +112,4 @@ curl --noproxy '' -x http://127.0.0.1:8080 http://127.0.0.1:8000/home.html
 
 - 원본 기간: 2026-04-17 ~ 2026-04-23 (원본 첫·마지막 커밋일). 이 저장소는 2026-04-21의 `964163c`에서 이어 받았습니다.
 - 개인 확장: 2026-09-08 ~ 2026-09-22, `git log --author="woonyong" 964163c..HEAD`. 원본은 CS:APP 과제 골격(Tiny·Echo)이었고, 이후 worker 수·timeout 상한, 캐시 가능 응답과 거절할 메시지 형식의 제한, 통합 테스트·데모, CI를 추가했습니다.
-- 이전 Echo·Tiny·프록시 실습 자료는 [정리 전 이력](https://github.com/woonyong-choi/lrn-http-proxy/tree/0580e06a40163a42e70b18d065f47687ed9f53bf)에 남아 있습니다. 과제 제공 코드(CS:APP `csapp.c`)의 저작권 표시는 소스에 유지합니다.
+- 이전 Echo·Tiny·프록시 실습 자료는 [정리 전 이력](https://github.com/woonyong-choi/lrn-http-proxy/tree/0580e06a40163a42e70b18d065f47687ed9f53bf)에 남아 있습니다. 과제 제공 코드 중 프록시가 실제로 호출하는 것은 CS:APP `csapp.c`의 Rio 읽기 함수 3개뿐이어서, 그 부분만 [rio.c](webproxy-lab/rio.c)로 옮기고 나머지는 지웠습니다(구현과 저작권 표시는 그대로입니다).

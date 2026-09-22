@@ -1,0 +1,64 @@
+{
+  "env": {
+    "platform": "macOS-26.5.2",
+    "machine": "arm64",
+    "python": "3.9.6",
+    "when": "2026-09-22 09:48:32 KST"
+  },
+  "direct": {
+    "n": 300,
+    "p50_ms": 0.11,
+    "p90_ms": 0.1558,
+    "p99_ms": 0.3133,
+    "mean_ms": 0.1201
+  },
+  "miss": {
+    "n": 300,
+    "p50_ms": 0.148,
+    "p90_ms": 0.216,
+    "p99_ms": 0.3244,
+    "mean_ms": 0.1647
+  },
+  "hit": {
+    "n": 300,
+    "p50_ms": 0.0547,
+    "p90_ms": 0.0781,
+    "p99_ms": 0.162,
+    "mean_ms": 0.0631
+  },
+  "throughput": [
+    {
+      "concurrency": 1,
+      "req_per_s": 15423.3
+    },
+    {
+      "concurrency": 2,
+      "req_per_s": 15822.8
+    },
+    {
+      "concurrency": 4,
+      "req_per_s": 10870.6
+    },
+    {
+      "concurrency": 8,
+      "req_per_s": 9063.8
+    },
+    {
+      "concurrency": 16,
+      "req_per_s": 8877.6
+    },
+    {
+      "concurrency": 32,
+      "req_per_s": 9089.8
+    }
+  ],
+  "head_of_line": {
+    "concurrency": 32,
+    "origin_delay_ms": 200.0,
+    "workers": 8,
+    "wall_s": 0.82,
+    "batches_expected": 4,
+    "wall_if_pool_is_the_limit_s": 0.8,
+    "slowest_request_s": 0.815
+  }
+}
