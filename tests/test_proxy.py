@@ -14,6 +14,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 COUNTS = Counter()
 LOCK = threading.Lock()
+WORKERS = 4
+# NUL bytes and an embedded blank line: the cache stores one NUL-terminated
+# blob and re-splits it on the first CRLFCRLF, so a body that looks like a
+# header terminator is the case that breaks a naive implementation.
+BINARY = b"\r\n\r\n" + bytes(range(256)) * 4 + b"\x00\x00\r\n\r\n"
 
 
 class Origin(http.server.BaseHTTPRequestHandler):
@@ -25,13 +30,19 @@ class Origin(http.server.BaseHTTPRequestHandler):
             COUNTS[self.path] += 1
         if self.path == "/slow":
             time.sleep(0.8)
+        if self.path == "/herd":
+            # Long enough that every worker is still in flight when the next
+            # client arrives, so the test observes uncoalesced misses.
+            time.sleep(0.15)
         if self.path == "/chunked":
             self.connection.sendall(
                 b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n"
             )
             return
         body = (
-            b"x" * 150000
+            BINARY
+            if self.path == "/binary"
+            else b"x" * 150000
             if self.path == "/large"
             else b"x" * 100000
             if self.path.startswith("/big-cache")
@@ -98,7 +109,7 @@ def servers():
     diagnostics = tempfile.TemporaryFile(mode="w+")
     proc = subprocess.Popen(
         [str(ROOT / "webproxy-lab/proxy"), str(port)],
-        env={**os.environ, "PROXY_TIMEOUT_MS": "300", "PROXY_WORKERS": "4"},
+        env={**os.environ, "PROXY_TIMEOUT_MS": "300", "PROXY_WORKERS": str(WORKERS)},
         stdout=subprocess.DEVNULL,
         stderr=diagnostics,
     )
@@ -177,11 +188,67 @@ class ProxyTests(unittest.TestCase):
         self.req("/broken")
         self.assertEqual(COUNTS["/broken"], 2)
 
-    def test_timeout_and_unsupported_framing(self):
+    def test_slow_and_chunked_origins_are_refused(self):
+        # Both failures belong to the origin side: no answer inside the
+        # timeout, and framing the proxy cannot forward without buffering.
         self.assertIn(b"504", self.req("/slow").split(b"\r\n", 1)[0])
         self.assertIn(b"502", self.req("/chunked").split(b"\r\n", 1)[0])
-        self.assertIn(b"400", self.req("/", headers="Content-Length: 10\r\n"))
-        self.assertIn(b"501", self.req("/", raw=b"CONNECT a:443 HTTP/1.1\r\n\r\n"))
+
+    def test_malformed_requests_are_refused_before_any_origin_contact(self):
+        # One row per rejection branch in parse_uri()/the header loop. Every
+        # case must be decided by the proxy alone, so COUNTS stays empty.
+        cases = [
+            ("origin-form target", b"GET /x HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("non-http scheme", b"GET https://a/ HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("userinfo in authority", b"GET http://u@a/ HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("ipv6 literal", b"GET http://[::1]:80/ HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("fragment", b"GET http://a/p#f HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("port 0", b"GET http://a:0/ HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("port above 65535", b"GET http://a:99999/ HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("empty host", b"GET http:/// HTTP/1.1\r\nHost: a\r\n\r\n", b"400"),
+            ("unknown version", b"GET http://a/ HTTP/2.0\r\nHost: a\r\n\r\n", b"400"),
+            ("trailing token", b"GET http://a/ HTTP/1.1 x\r\nHost: a\r\n\r\n", b"400"),
+            ("missing host header", b"GET http://a/ HTTP/1.1\r\n\r\n", b"400"),
+            ("duplicate host header", b"GET http://a/ HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", b"400"),
+            ("obs-fold continuation", b"GET http://a/ HTTP/1.1\r\nHost: a\r\nX: 1\r\n c\r\n\r\n", b"400"),
+            ("space before colon", b"GET http://a/ HTTP/1.1\r\nHost: a\r\nX : 1\r\n\r\n", b"400"),
+            ("chunked request", b"GET http://a/ HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n", b"400"),
+            ("request body", b"GET http://a/ HTTP/1.1\r\nHost: a\r\nContent-Length: 10\r\n\r\n", b"400"),
+            ("connection option", b"GET http://a/ HTTP/1.1\r\nHost: a\r\nConnection: foo\r\n\r\n", b"400"),
+            ("method other than GET", b"CONNECT a:443 HTTP/1.1\r\n\r\n", b"501"),
+        ]
+        for name, wire, status in cases:
+            with self.subTest(case=name):
+                reply = self.req("/", raw=wire)
+                self.assertIn(status, reply.split(b"\r\n", 1)[0])
+        self.assertEqual(sum(COUNTS.values()), 0)
+
+    def test_cached_body_is_returned_byte_for_byte(self):
+        # The cache keeps one NUL-terminated blob and re-inserts an Age header
+        # at the CRLFCRLF boundary; a binary body that contains NUL and a blank
+        # line would survive a byte-count bug but not a string-handling bug.
+        miss, hit = self.req("/binary"), self.req("/binary")
+        self.assertEqual(COUNTS["/binary"], 1)
+        for reply in (miss, hit):
+            head, body = reply.split(b"\r\n\r\n", 1)
+            self.assertEqual(body, BINARY)
+            # The proxy normalises forwarded header names to lower case.
+            self.assertIn(b"content-length: %d" % len(BINARY), head)
+        self.assertIn(b"Age: 0", hit.split(b"\r\n\r\n", 1)[0])
+
+    def test_concurrent_misses_stay_bounded_and_agree(self):
+        # No request coalescing: a cold URL fetched by many clients at once can
+        # reach the origin once per worker, never more, and every client must
+        # still get the same bytes and leave one consistent entry behind.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            replies = list(pool.map(lambda _: self.req("/herd"), range(16)))
+        bodies = {r.split(b"\r\n\r\n", 1)[1] for r in replies}
+        self.assertEqual(bodies, {b"/herd:payload"})
+        self.assertGreaterEqual(COUNTS["/herd"], 1)
+        self.assertLessEqual(COUNTS["/herd"], WORKERS)
+        settled = COUNTS["/herd"]
+        self.req("/herd")
+        self.assertEqual(COUNTS["/herd"], settled)
 
     def test_cache_capacity_and_recently_used_entry(self):
         for i in range(10):
